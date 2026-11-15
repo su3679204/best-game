@@ -1,117 +1,120 @@
-// Deterministic staged scenes for the screenshots: each runs the real simulation
-// a fixed number of fixed steps from a seed, then hands the renderer a state to
-// paint. ?shot=title|play|levelup|win (with &seed=N) stages that scene instead
-// of running the loop, paints it twice and sets window.__shotReady.
-import { STEP } from './config.js';
-import { SCREEN_LEVELUP, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
-import { EVENT_LEVELUP } from './world.js';
+// Deterministic staged scenes used only for screenshots. Each scene builds
+// a fixed world state from a seeded generator (no wall clock, no live loop),
+// so the same ?shot=<scene>&seed=1 always renders the same picture.
+import { createRng } from './random.js';
 import { makeEnemy } from './enemies.js';
-import { fireVolley } from './player.js';
+import { rollChoices } from './upgrades.js';
+import { ARENA } from './config.js';
 
-/** Autopilot: drift in a slow circle, aim at the nearest foe, always firing. */
-function autopilot(world, t) {
-  const s = world.state;
-  const p = s.player;
-  const move = { x: Math.cos(t * 0.5), y: Math.sin(t * 0.5) };
-  let aim = { x: p.x + 200, y: p.y };
-  let best = Infinity;
-  for (const e of s.enemies) {
-    const d = Math.hypot(e.x - p.x, e.y - p.y);
-    if (d < best) {
-      best = d;
-      aim = { x: e.x, y: e.y };
-    }
+/** Stage `world` into the named scene and return the screen to render. */
+export function stageShot(world, scene, seed) {
+  const state = world.state;
+  const rng = createRng(seed || 1);
+  // NOTE: startRun() replaces state.player with a fresh object, so the
+  // player handle must be taken AFTER staging a run, never before it.
+  if (scene === 'title') {
+    world.startRun();
+    state.enemies = [];
+    const spots = [[300, 250], [980, 200], [820, 520], [420, 560], [1080, 430]];
+    const kinds = ['mite', 'wisp', 'spitter', 'dasher', 'brute'];
+    spots.forEach(([x, y], i) => state.enemies.push(makeEnemy(kinds[i], x, y, 1, rng)));
+    state.spawnQueue = [];
+    state.banner = '';
+    state.bannerTimer = 0;
+    state.score = 0;
+    state.kills = 0;
+    return 'title';
   }
-  return { move, aim, firing: true };
-}
 
-function runSteps(world, seconds, driver) {
-  const steps = Math.floor(seconds / STEP);
-  for (let i = 0; i < steps; i += 1) {
-    const t = i * STEP;
-    const input = driver ? driver(world, t) : { move: { x: 0, y: 0 }, aim: { x: 640, y: 200 }, firing: false };
-    // On the title screen the lantern-bearer cannot be hurt: the game plays behind it.
-    world.state.player.invulnerable = Math.max(world.state.player.invulnerable, STEP * 2);
-    world.state.player.hp = world.state.player.maxHp;
-    world.step(STEP, input.move, input.aim, input.firing);
-    if (world.state.over || world.state.victory) break;
-  }
-}
-
-export function stageShot(name, world) {
-  if (name === 'title') {
-    runSteps(world, 6, null);
-    // Keep foes out of the central title panel so the text reads cleanly.
-    for (const e of world.state.enemies) {
-      if (e.x > 280 && e.x < 1000 && e.y > 220 && e.y < 480) {
-        e.x = 150;
-        e.y = 620;
-      }
-    }
-    world.state.player.x = 640;
-    world.state.player.y = 620;
-    world.state.banner = '';
-    world.state.bannerTimer = 0;
-    return { screen: SCREEN_TITLE, best: 2450 };
-  }
-  if (name === 'play') {
-    runSteps(world, 26, autopilot);
-    const s = world.state;
-    // Stage a busy mid-fight: the bearer centred, foes closing in, a volley out.
-    s.player.x = 640;
-    s.player.y = 420;
-    s.player.aimX = 900;
-    s.player.aimY = 300;
-    const spots = [
-      ['mite', 420, 300], ['wisp', 880, 240], ['spitter', 1010, 470],
-      ['dasher', 380, 540], ['brute', 830, 560], ['mite', 1020, 300],
+  if (scene === 'levelup') {
+    world.startRun();
+    const p = state.player;
+    state.wave = 4;
+    state.score = 1680;
+    state.kills = 31;
+    state.time = 142;
+    p.level = 5;
+    p.xp = 3;
+    p.hp = 82;
+    p.x = 480;
+    p.y = 430;
+    p.aimX = 820;
+    p.aimY = 300;
+    state.enemies = [
+      makeEnemy('mite', 820, 300, 4, rng),
+      makeEnemy('wisp', 950, 380, 4, rng),
+      makeEnemy('spitter', 1020, 220, 4, rng),
+      makeEnemy('dasher', 700, 180, 4, rng),
     ];
-    for (const [kind, x, y] of spots) {
-      const e = makeEnemy(s.random, kind, Math.max(2, s.wave), s.player.x, s.player.y);
-      e.x = x;
-      e.y = y;
-      s.enemies.push(e);
-    }
-    for (const b of fireVolley(s.player, s.random)) {
-      b.x += b.vx * 0.06;
-      b.y += b.vy * 0.06;
-      s.bullets.push(b);
-    }
-    s.particles.burst(880, 240, '#4fd8e8', 12, 140, 4);
-    s.banner = `WAVE ${s.wave}`;
-    s.bannerTimer = 2;
-    return { screen: SCREEN_PLAY, best: 2450 };
+    state.gems = [
+      { x: 560, y: 480, vx: 0, vy: 0, value: 1, kind: 'small' },
+      { x: 620, y: 520, vx: 0, vy: 0, value: 2, kind: 'small' },
+      { x: 420, y: 360, vx: 0, vy: 0, value: 1, kind: 'small' },
+    ];
+    state.spawnQueue = [];
+    state.banner = '';
+    state.bannerTimer = 0;
+    state.levelChoices = rollChoices(p, rng);
+    return 'levelup';
   }
-  if (name === 'levelup') {
-    runSteps(world, 16, autopilot);
-    // Force a level-up so the draft cards are on screen.
-    world.state.player.xp = 0;
-    world.gainXp(60);
-    if (!world.state.levelChoices) {
-      world.state.player.level += 1;
-      world.state.pendingLevels = 1;
-      world.gainXp(0);
-    }
-    void EVENT_LEVELUP;
-    return { screen: SCREEN_LEVELUP, best: 2450 };
+
+  if (scene === 'win') {
+    world.startRun();
+    const p = state.player;
+    state.wave = 15;
+    state.score = 8450;
+    state.kills = 142;
+    state.time = 612;
+    p.level = 12;
+    p.hp = 64;
+    p.x = ARENA.width / 2;
+    p.y = 480;
+    p.aimX = 640;
+    p.aimY = 200;
+    state.enemies = [];
+    state.boss = null;
+    state.gems = [];
+    state.spawnQueue = [];
+    state.banner = '';
+    state.bannerTimer = 0;
+    state.victory = true;
+    state.best = Math.max(state.best, 8450);
+    return 'victory';
   }
-  // win
-  runSteps(world, 10, autopilot);
-  const s = world.state;
-  s.enemies.length = 0;
-  s.bullets.length = 0;
-  s.ebullets.length = 0;
-  s.victory = true;
-  s.wave = 15;
-  s.score = 3240;
-  s.kills = 187;
-  s.time = 482;
-  s.player.level = 12;
-  s.player.hp = 64;
-  s.banner = '';
-  s.bannerTimer = 0;
-  s.particles.burst(640, 300, '#ffd94d', 40, 220, 5);
-  s.particles.burst(300, 200, '#ff7a3c', 24, 180, 4);
-  s.particles.burst(980, 220, '#7ab8ff', 24, 180, 4);
-  return { screen: SCREEN_WIN, best: 2450 };
+
+  // Default: 'play' — a busy mid-fight on wave 3 with the HUD visible.
+  world.startRun();
+  const p = state.player;
+  state.wave = 3;
+  state.score = 1240;
+  state.kills = 23;
+  state.time = 95;
+  p.level = 4;
+  p.xp = 5;
+  p.hp = 78;
+  p.x = 480;
+  p.y = 420;
+  p.aimX = 900;
+  p.aimY = 280;
+  const kinds = ['mite', 'mite', 'wisp', 'spitter', 'dasher', 'mite', 'brute', 'wisp', 'mite'];
+  const spots = [[900, 280], [1020, 380], [860, 180], [1080, 240], [760, 520], [620, 200], [980, 540], [420, 300], [700, 620]];
+  state.enemies = kinds.map((k, i) => makeEnemy(k, spots[i][0], spots[i][1], 3, rng));
+  state.enemies[0].hp = Math.round(state.enemies[0].maxHp * 0.4);
+  state.enemies[0].flash = 0.8;
+  state.gems = [
+    { x: 560, y: 480, vx: 0, vy: 0, value: 1, kind: 'small' },
+    { x: 640, y: 540, vx: 0, vy: 0, value: 2, kind: 'small' },
+    { x: 400, y: 360, vx: 0, vy: 0, value: 1, kind: 'small' },
+    { x: 720, y: 460, vx: 0, vy: 0, value: 4, kind: 'big' },
+    { x: 520, y: 300, vx: 0, vy: 0, value: 1, kind: 'small' },
+  ];
+  state.bolts = [
+    { x: 560, y: 400, vx: 380, vy: -140, damage: 12, pierce: 0, life: 0.8, radius: 6, hitIds: new Set() },
+    { x: 620, y: 380, vx: 400, vy: -100, damage: 12, pierce: 0, life: 0.8, radius: 6, hitIds: new Set() },
+    { x: 500, y: 440, vx: 360, vy: -180, damage: 12, pierce: 0, life: 0.8, radius: 6, hitIds: new Set() },
+  ];
+  state.spawnQueue = [];
+  state.banner = '';
+  state.bannerTimer = 0;
+  return 'playing';
 }

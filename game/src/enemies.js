@@ -1,210 +1,193 @@
-// Enemy kinds, their steering, and the Cinder Warden boss. Each kind has one
-// clear behaviour: chase, strafe-and-shoot, lunge, tank, or drift. Elites are
-// the same kinds scaled up and gilded.
-import { BOSS, ELITE, ENEMIES, FIELD } from './config.js';
-import { chance, pick, range } from './random.js';
+// Fiend kinds, their steering, and boss behaviour. Each kind moves its own
+// way: mites chase, wisps wander, spitters keep range and shoot, dashers
+// telegraph then lunge, brutes plod straight at the lantern. Bosses fire
+// radial bursts and summon mites, and quicken as their health falls.
+import { ENEMY_TYPES, ELITE, BOSS_TUNING, ARENA } from './config.js';
 
 let nextId = 1;
 
-/** Which kinds may appear in a given wave (new kinds join as waves climb). */
-export function kindsForWave(wave) {
-  const kinds = ['mite'];
-  if (wave >= 2) kinds.push('wisp');
-  if (wave >= 3) kinds.push('spitter');
-  if (wave >= 4) kinds.push('dasher');
-  if (wave >= 6) kinds.push('brute');
-  return kinds;
-}
-
-/** A spawn point on the arena edge, away from the player. */
-export function spawnPoint(random, px, py) {
-  for (let tries = 0; tries < 12; tries += 1) {
-    const side = Math.floor(random() * 4);
-    let x;
-    let y;
-    if (side === 0) { x = range(random, 40, FIELD.width - 40); y = 36; }
-    else if (side === 1) { x = range(random, 40, FIELD.width - 40); y = FIELD.height - 36; }
-    else if (side === 2) { x = 36; y = range(random, 40, FIELD.height - 40); }
-    else { x = FIELD.width - 36; y = range(random, 40, FIELD.height - 40); }
-    if (Math.hypot(x - px, y - py) > 320) return { x, y };
-  }
-  return { x: 60, y: 60 };
-}
-
-export function makeEnemy(random, kind, wave, px, py) {
-  const def = ENEMIES[kind];
-  const elite = chance(random, 0.06 + wave * 0.004);
-  const hpMul = (1 + 0.16 * (wave - 1)) * (elite ? ELITE.hpMul : 1);
-  const at = spawnPoint(random, px, py);
-  const id = nextId;
-  nextId += 1;
+/** Build one fiend at (x, y) for the given wave. Elites are golden and tougher. */
+export function makeEnemy(kind, x, y, wave, rng) {
+  const base = ENEMY_TYPES[kind];
+  // Elites are decided by the world (eliteChance roll), never here, so a
+  // fresh fiend always starts ordinary; promoteElite() upgrades it later.
+  const elite = false;
+  const hpScale = 1 + 0.12 * (wave - 1);
+  const hp = Math.round(base.hp * hpScale * (elite ? ELITE.hpMult : 1));
   return {
-    id,
+    id: nextId++,
     kind,
+    x, y,
+    vx: 0, vy: 0,
+    hp, maxHp: hp,
+    speed: base.speed * (1 + 0.02 * (wave - 1)) * (elite ? ELITE.speedMult : 1),
+    radius: base.radius * (elite ? ELITE.radiusMult : 1),
+    damage: base.damage,
+    xp: base.xp * (elite ? ELITE.xpMult : 1),
+    score: base.score * (elite ? ELITE.scoreMult : 1),
+    color: elite ? '#ffd23c' : base.color,
     elite,
-    x: at.x,
-    y: at.y,
-    vx: 0,
-    vy: 0,
-    hp: def.hp * hpMul,
-    maxHp: def.hp * hpMul,
-    speed: def.speed * (1 + Math.min(0.35, wave * 0.015)) * (elite ? ELITE.speedMul : 1),
-    radius: def.radius * (elite ? ELITE.radiusMul : 1),
-    damage: def.damage,
-    score: def.score * (elite ? ELITE.scoreMul : 1),
-    xp: def.xp * (elite ? ELITE.xpMul : 1),
-    colour: elite ? '#ffd94d' : def.colour,
-    flash: 0,
     touchTimer: 0,
-    shootTimer: range(random, 1, 2.4),
-    lungeTimer: range(random, 1.5, 3),
-    lungeState: 0,
-    lungeVx: 0,
-    lungeVy: 0,
-    phase: random() * Math.PI * 2,
-    knockX: 0,
-    knockY: 0,
+    flash: 0,
+    knockX: 0, knockY: 0,
+    // Per-kind state:
+    windup: 0,        // dasher: telegraph timer before a lunge
+    lunging: 0,       // dasher: lunge time remaining
+    lungeX: 0, lungeY: 0,
+    shootTimer: rng ? rng.range(1, 2.5) : 1.5, // spitter: time to next shot
+    wanderAngle: rng ? rng.range(0, Math.PI * 2) : 0,
+    wanderTimer: 0,
   };
 }
 
+/** Mark a fresh fiend elite (used by the world when its own roll says so). */
+export function promoteElite(e) {
+  e.elite = true;
+  e.color = '#ffd23c';
+  e.maxHp = Math.round(e.maxHp * ELITE.hpMult);
+  e.hp = e.maxHp;
+  e.speed *= ELITE.speedMult;
+  e.radius *= ELITE.radiusMult;
+  e.xp *= ELITE.xpMult;
+  e.score *= ELITE.scoreMult;
+}
+
+/** Build a boss for a boss wave. */
 export function makeBoss(wave) {
-  const scale = 1 + 0.18 * (wave / 5 - 1);
-  const id = nextId;
-  nextId += 1;
+  const tune = BOSS_TUNING[wave] || BOSS_TUNING[15];
   return {
-    id,
+    id: nextId++,
     kind: 'boss',
-    elite: false,
-    x: FIELD.width / 2,
-    y: 120,
-    vx: 0,
-    vy: 0,
-    hp: BOSS.hp * scale,
-    maxHp: BOSS.hp * scale,
-    speed: BOSS.speed,
-    radius: BOSS.radius,
-    damage: BOSS.damage,
-    score: BOSS.score,
+    name: tune.name,
+    x: ARENA.width / 2,
+    y: 150,
+    vx: 0, vy: 0,
+    hp: tune.hp, maxHp: tune.hp,
+    speed: tune.speed,
+    radius: tune.radius,
+    damage: tune.damage,
+    score: tune.score,
     xp: 25,
-    colour: '#ff5a3c',
-    flash: 0,
+    color: '#e63e21',
+    elite: false,
     touchTimer: 0,
-    shootTimer: 2,
-    burstTimer: BOSS.burstInterval,
-    summonTimer: BOSS.summonInterval,
-    phase: 0,
-    knockX: 0,
-    knockY: 0,
+    flash: 0,
+    knockX: 0, knockY: 0,
+    burstTimer: 2.0,
+    summonTimer: 5.0,
+    windup: 0, lunging: 0, lungeX: 0, lungeY: 0,
+    shootTimer: 0, wanderAngle: 0, wanderTimer: 0,
   };
 }
 
-/** Steer one enemy for a step; returns ebullets it fired (possibly none). */
-export function stepEnemy(e, dt, px, py, random, time) {
-  const dx = px - e.x;
-  const dy = py - e.y;
+function steerToward(e, tx, ty, speed) {
+  const dx = tx - e.x;
+  const dy = ty - e.y;
+  const d = Math.hypot(dx, dy) || 1;
+  e.vx = (dx / d) * speed;
+  e.vy = (dy / d) * speed;
+}
+
+function clampArena(e) {
+  const m = ARENA.wall + e.radius;
+  e.x = Math.max(m, Math.min(ARENA.width - m, e.x));
+  e.y = Math.max(m, Math.min(ARENA.height - m, e.y));
+}
+
+/**
+ * Move one fiend for a step. `env` carries the player, the step length, the
+ * rng, and callbacks to fire an enemy projectile or summon a mite.
+ */
+export function updateEnemy(e, env) {
+  const { player, dt, rng } = env;
+  e.touchTimer = Math.max(0, e.touchTimer - dt);
+  e.flash = Math.max(0, e.flash - dt * 6);
+  const dx = player.x - e.x;
+  const dy = player.y - e.y;
   const dist = Math.hypot(dx, dy) || 1;
-  const nx = dx / dist;
-  const ny = dy / dist;
-  const shots = [];
-  if (e.flash > 0) e.flash -= dt;
-  if (e.touchTimer > 0) e.touchTimer -= dt;
 
-  // Knockback decays and is added to whatever the kind does.
-  e.x += e.knockX * dt;
-  e.y += e.knockY * dt;
-  e.knockX *= 0.86;
-  e.knockY *= 0.86;
-
-  if (e.kind === 'mite' || e.kind === 'brute') {
-    e.x += nx * e.speed * dt;
-    e.y += ny * e.speed * dt;
+  if (e.kind === 'mite') {
+    steerToward(e, player.x, player.y, e.speed);
   } else if (e.kind === 'wisp') {
-    const wobble = Math.sin(time * 3 + e.phase) * 0.7;
-    e.x += (nx - ny * wobble) * e.speed * dt;
-    e.y += (ny + nx * wobble) * e.speed * dt;
-  } else if (e.kind === 'spitter') {
-    // Keep a ring around the player and spit embers at them.
-    if (dist > 300) {
-      e.x += nx * e.speed * dt;
-      e.y += ny * e.speed * dt;
-    } else if (dist < 200) {
-      e.x -= nx * e.speed * dt;
-      e.y -= ny * e.speed * dt;
-    } else {
-      e.x += -ny * e.speed * 0.5 * dt;
-      e.y += nx * e.speed * 0.5 * dt;
+    e.wanderTimer -= dt;
+    if (e.wanderTimer <= 0) {
+      e.wanderTimer = rng.range(0.8, 1.8);
+      e.wanderAngle = Math.atan2(dy, dx) + rng.range(-1.1, 1.1);
     }
+    e.vx = Math.cos(e.wanderAngle) * e.speed;
+    e.vy = Math.sin(e.wanderAngle) * e.speed;
+  } else if (e.kind === 'spitter') {
+    // Hold about 260 px away and shoot; drift sideways while waiting.
+    if (dist > 300) steerToward(e, player.x, player.y, e.speed);
+    else if (dist < 200) steerToward(e, e.x - dx, e.y - dy, e.speed * 0.8);
+    else { e.vx = (-dy / dist) * e.speed * 0.5; e.vy = (dx / dist) * e.speed * 0.5; }
     e.shootTimer -= dt;
-    if (e.shootTimer <= 0 && dist < 560) {
-      e.shootTimer = 2.3;
-      shots.push({ x: e.x, y: e.y, vx: nx * 260, vy: ny * 260, radius: 7, damage: e.damage, life: 4 });
+    if (e.shootTimer <= 0 && dist < 520) {
+      e.shootTimer = rng.range(2.2, 3.0);
+      const sp = 170;
+      env.fireEnemyShot(e.x, e.y, (dx / dist) * sp, (dy / dist) * sp, e.damage, 7);
     }
   } else if (e.kind === 'dasher') {
-    e.lungeTimer -= dt;
-    if (e.lungeState === 0) {
-      e.x += nx * e.speed * dt;
-      e.y += ny * e.speed * dt;
-      if (e.lungeTimer <= 0 && dist < 420) {
-        e.lungeState = 1;
-        e.lungeTimer = 0.45;
-        e.lungeVx = nx;
-        e.lungeVy = ny;
+    if (e.lunging > 0) {
+      e.lunging -= dt;
+      e.vx = e.lungeX;
+      e.vy = e.lungeY;
+    } else if (e.windup > 0) {
+      e.windup -= dt;
+      e.vx = 0; e.vy = 0;
+      if (e.windup <= 0) {
+        e.lunging = 0.35;
+        e.lungeX = (dx / dist) * 340;
+        e.lungeY = (dy / dist) * 340;
       }
-    } else if (e.lungeState === 1) {
-      // Telegraph: shiver in place before the lunge.
-      e.x += (random() - 0.5) * 40 * dt;
-      e.y += (random() - 0.5) * 40 * dt;
-      if (e.lungeTimer <= 0) {
-        e.lungeState = 2;
-        e.lungeTimer = 0.4;
-      }
+    } else if (dist < 260) {
+      e.windup = 0.55; // visible telegraph: the dasher flashes before lunging
+      e.vx = 0; e.vy = 0;
     } else {
-      e.x += e.lungeVx * 520 * dt;
-      e.y += e.lungeVy * 520 * dt;
-      if (e.lungeTimer <= 0) {
-        e.lungeState = 0;
-        e.lungeTimer = range(random, 1.6, 3);
-      }
+      steerToward(e, player.x, player.y, e.speed);
     }
-  } else if (e.kind === 'boss') {
-    const hpFrac = e.hp / e.maxHp;
-    const speed = e.speed * (hpFrac < 0.33 ? 1.5 : hpFrac < 0.66 ? 1.2 : 1);
-    e.x += nx * speed * dt;
-    e.y += ny * speed * dt;
-    e.burstTimer -= dt;
-    if (e.burstTimer <= 0) {
-      e.burstTimer = BOSS.burstInterval * (hpFrac < 0.33 ? 0.7 : 1);
-      const n = hpFrac < 0.33 ? 14 : 10;
-      for (let i = 0; i < n; i += 1) {
-        const a = (i / n) * Math.PI * 2 + e.phase;
-        shots.push({ x: e.x, y: e.y, vx: Math.cos(a) * 200, vy: Math.sin(a) * 200, radius: 8, damage: 14, life: 5 });
-      }
-      e.phase += 0.4;
-    }
-    if (hpFrac < 0.66) {
-      e.summonTimer -= dt;
-      if (e.summonTimer <= 0) {
-        e.summonTimer = BOSS.summonInterval;
-        e.summon = true;
-      }
-    }
+  } else if (e.kind === 'brute') {
+    steerToward(e, player.x, player.y, e.speed);
   }
 
-  e.x = Math.max(e.radius, Math.min(FIELD.width - e.radius, e.x));
-  e.y = Math.max(e.radius, Math.min(FIELD.height - e.radius, e.y));
-  return shots;
+  e.x += (e.vx + e.knockX) * dt;
+  e.y += (e.vy + e.knockY) * dt;
+  e.knockX *= 0.86;
+  e.knockY *= 0.86;
+  clampArena(e);
 }
 
-export function pickKind(random, wave) {
-  const kinds = kindsForWave(wave);
-  // Brutes stay rare; mites thin out as the roster grows.
-  const weights = kinds.map((k) => (k === 'brute' ? 0.5 : k === 'mite' ? 1.4 : 1));
-  let total = 0;
-  for (const w of weights) total += w;
-  let roll = random() * total;
-  for (let i = 0; i < kinds.length; i += 1) {
-    roll -= weights[i];
-    if (roll <= 0) return kinds[i];
+/** Move the boss: slow chase, radial bursts, mite summons, faster when hurt. */
+export function updateBoss(boss, env) {
+  const { player, dt, rng } = env;
+  boss.touchTimer = Math.max(0, boss.touchTimer - dt);
+  boss.flash = Math.max(0, boss.flash - dt * 6);
+  const enrage = 1 + (1 - boss.hp / boss.maxHp) * 0.7;
+  const dx = player.x - boss.x;
+  const dy = player.y - boss.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  steerToward(boss, player.x, player.y, boss.speed * enrage);
+  if (dist < 130) { boss.vx *= -0.4; boss.vy *= -0.4; }
+
+  boss.burstTimer -= dt;
+  if (boss.burstTimer <= 0) {
+    boss.burstTimer = Math.max(1.2, 2.3 / enrage);
+    const n = 10;
+    for (let i = 0; i < n; i++) {
+      const a = (i / n) * Math.PI * 2 + rng.range(-0.1, 0.1);
+      env.fireEnemyShot(boss.x, boss.y, Math.cos(a) * 150, Math.sin(a) * 150, 8, 8);
+    }
+    env.onBossBurst?.();
   }
-  return kinds[0];
+  boss.summonTimer -= dt;
+  if (boss.summonTimer <= 0) {
+    boss.summonTimer = 6;
+    env.summonMites?.(3);
+  }
+
+  boss.x += (boss.vx + boss.knockX) * dt;
+  boss.y += (boss.vy + boss.knockY) * dt;
+  boss.knockX *= 0.86;
+  boss.knockY *= 0.86;
+  clampArena(boss);
 }

@@ -1,114 +1,80 @@
-// Keyboard + mouse, read as a canvas-relative aim point and a movement vector.
-// Actions are edge-triggered bits consumed once per frame by the game loop.
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
-export const ACTION_MUTE = 4;
-export const ACTION_CHOICE_1 = 8;
-export const ACTION_CHOICE_2 = 16;
-export const ACTION_CHOICE_3 = 32;
+// Keyboard plus mouse input. Tracks what is held down, what was just
+// pressed this frame, and where the mouse is and whether it is clicking.
+// The main loop consumes "just pressed" keys so a single tap never fires twice.
+export class Input {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.keys = new Set();
+    this.pressed = new Set();
+    this.mouseX = 640;
+    this.mouseY = 300;
+    this.mouseDown = false;
+    this.clicked = null;
+    this.onFirstGesture = null;
 
-export function createInput(canvas) {
-  const keys = new Set();
-  let actions = 0;
-  let firing = false;
-  let mouseX = 640;
-  let mouseY = 360;
-  let mouseDown = false;
-  let clicked = false;
-  let clickX = 0;
-  let clickY = 0;
+    window.addEventListener('keydown', (e) => {
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+      if (!e.repeat) this.pressed.add(e.code);
+      this.keys.add(e.code);
+      if (this.onFirstGesture) this.onFirstGesture();
+    });
+    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
+    window.addEventListener('blur', () => {
+      this.keys.clear();
+      this.pressed.clear();
+      this.mouseDown = false;
+    });
 
-  function keyToAction(code) {
-    if (code === 'Space' || code === 'Enter') return ACTION_CONFIRM;
-    if (code === 'KeyP' || code === 'Escape') return ACTION_PAUSE;
-    if (code === 'KeyM') return ACTION_MUTE;
-    if (code === 'Digit1' || code === 'Numpad1') return ACTION_CHOICE_1;
-    if (code === 'Digit2' || code === 'Numpad2') return ACTION_CHOICE_2;
-    if (code === 'Digit3' || code === 'Numpad3') return ACTION_CHOICE_3;
-    return 0;
+    canvas.addEventListener('mousemove', (e) => {
+      const r = canvas.getBoundingClientRect();
+      this.mouseX = (e.clientX - r.left) * (canvas.width / r.width);
+      this.mouseY = (e.clientY - r.top) * (canvas.height / r.height);
+    });
+    canvas.addEventListener('mousedown', (e) => {
+      this.mouseDown = true;
+      const r = canvas.getBoundingClientRect();
+      this.clicked = {
+        x: (e.clientX - r.left) * (canvas.width / r.width),
+        y: (e.clientY - r.top) * (canvas.height / r.height),
+      };
+      if (this.onFirstGesture) this.onFirstGesture();
+    });
+    window.addEventListener('mouseup', () => { this.mouseDown = false; });
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   }
 
-  function canvasPoint(event) {
-    const rect = canvas.getBoundingClientRect();
-    return {
-      x: ((event.clientX - rect.left) / rect.width) * 1280,
-      y: ((event.clientY - rect.top) / rect.height) * 720,
-    };
+  /** True while the key is held. */
+  down(code) { return this.keys.has(code); }
+
+  /** True once, on the frame the key went down; consumed by the caller. */
+  wasPressed(code) {
+    if (this.pressed.has(code)) { this.pressed.delete(code); return true; }
+    return false;
   }
 
-  window.addEventListener('keydown', (event) => {
-    if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) {
-      event.preventDefault();
-    }
-    if (!event.repeat) {
-      actions |= keyToAction(event.code);
-      if (event.code === 'Space') firing = true;
-    }
-    keys.add(event.code);
-  });
-  window.addEventListener('keyup', (event) => {
-    keys.delete(event.code);
-    if (event.code === 'Space') firing = false;
-  });
-  canvas.addEventListener('mousemove', (event) => {
-    const p = canvasPoint(event);
-    mouseX = p.x;
-    mouseY = p.y;
-  });
-  canvas.addEventListener('mousedown', (event) => {
-    const p = canvasPoint(event);
-    mouseX = p.x;
-    mouseY = p.y;
-    mouseDown = true;
-    clicked = true;
-    clickX = p.x;
-    clickY = p.y;
-  });
-  window.addEventListener('mouseup', () => {
-    mouseDown = false;
-  });
-  window.addEventListener('blur', () => {
-    keys.clear();
-    firing = false;
-    mouseDown = false;
-  });
-
-  function has(...codes) {
-    return codes.some((c) => keys.has(c));
+  /** Any movement key held, as a normalised direction vector. */
+  moveVector() {
+    let x = 0;
+    let y = 0;
+    if (this.down('KeyA') || this.down('ArrowLeft')) x -= 1;
+    if (this.down('KeyD') || this.down('ArrowRight')) x += 1;
+    if (this.down('KeyW') || this.down('ArrowUp')) y -= 1;
+    if (this.down('KeyS') || this.down('ArrowDown')) y += 1;
+    const len = Math.hypot(x, y);
+    if (len === 0) return { x: 0, y: 0 };
+    return { x: x / len, y: y / len };
   }
 
-  return {
-    /** Normalised WASD / arrow movement vector. */
-    direction() {
-      let x = 0;
-      let y = 0;
-      if (has('KeyA', 'ArrowLeft')) x -= 1;
-      if (has('KeyD', 'ArrowRight')) x += 1;
-      if (has('KeyW', 'ArrowUp')) y -= 1;
-      if (has('KeyS', 'ArrowDown')) y += 1;
-      if (x !== 0 && y !== 0) {
-        const inv = 1 / Math.hypot(x, y);
-        x *= inv;
-        y *= inv;
-      }
-      return { x, y };
-    },
-    get firing() {
-      return firing || mouseDown;
-    },
-    get mouse() {
-      return { x: mouseX, y: mouseY };
-    },
-    /** The latest click point, if the player clicked since the last read. */
-    takeClick() {
-      if (!clicked) return null;
-      clicked = false;
-      return { x: clickX, y: clickY };
-    },
-    takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
-    },
-  };
+  /** Whether the player is holding fire: mouse or Space. */
+  firing() { return this.mouseDown || this.down('Space'); }
+
+  /** The mouse position most recently clicked, consumed once. */
+  takeClick() {
+    const c = this.clicked;
+    this.clicked = null;
+    return c;
+  }
+
+  /** Clear the just-pressed set at the end of a frame. */
+  endFrame() { this.pressed.clear(); }
 }

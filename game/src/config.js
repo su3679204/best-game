@@ -1,84 +1,88 @@
-// Every tuning number and colour in one place. The arena is a fixed 1280x720 logical
-// area; the renderer scales it to the window, so no rule below depends on screen size.
-export const FIELD = { width: 1280, height: 720 };
+// Emberward tuning: every number the game balances on lives here, so a
+// difficulty tweak is one edit in one place. Colours are the lantern palette:
+// warm ember light against a cold, dark valley.
+export const ARENA = { width: 1280, height: 720, wall: 26 };
 
-/** The simulation's fixed step, in seconds: 60 updates a second whatever the display's rate. */
-export const STEP = 1 / 60;
+export const PALETTE = {
+  bg: '#0d0a14',
+  arena: '#171226',
+  arenaEdge: '#2a2140',
+  floorDot: '#241c38',
+  lantern: '#ffb347',
+  ember: '#ff6b35',
+  emberDeep: '#e63e21',
+  gold: '#ffd23c',
+  hp: '#ff5a5a',
+  hpBack: '#3a2030',
+  xp: '#7ee787',
+  text: '#f5ead6',
+  dim: '#a89ec2',
+  card: '#221a33',
+  cardEdge: '#ffb347',
+  boss: '#c0392b',
+};
 
-/** Survive this many waves and slay the Wave 15 boss to win. */
+export const PLAYER_TUNING = {
+  maxHp: 100,
+  speed: 235,
+  radius: 14,
+  boltDamage: 12,
+  boltSpeed: 540,
+  fireInterval: 0.3,
+  projectiles: 1,
+  pierce: 0,
+  magnet: 95,
+  xpNeedBase: 6,
+  xpNeedStep: 5,
+  invulnerableAfterHit: 0.9,
+  touchCooldown: 0.7,
+};
+
+// One entry per fiend kind: health, speed, size, touch damage, XP and score.
+// Wave scaling multiplies health (and a little speed) in enemies.js.
+export const ENEMY_TYPES = {
+  mite:   { hp: 18, speed: 92, radius: 13, damage: 5,  xp: 1, score: 10, color: '#ff7a3c', name: 'Ember Mite' },
+  wisp:   { hp: 14, speed: 58, radius: 12, damage: 4,  xp: 1, score: 15, color: '#c9a7ff', name: 'Cinder Wisp' },
+  spitter:{ hp: 22, speed: 72, radius: 14, damage: 5,  xp: 2, score: 20, color: '#7ee787', name: 'Ash Spitter' },
+  dasher: { hp: 20, speed: 78, radius: 13, damage: 9,  xp: 2, score: 25, color: '#ffd23c', name: 'Spark Dasher' },
+  brute:  { hp: 70, speed: 44, radius: 20, damage: 13, xp: 4, score: 40, color: '#b08968', name: 'Coal Brute' },
+};
+
+export const ELITE = { hpMult: 2.2, speedMult: 1.15, xpMult: 3, scoreMult: 3, radiusMult: 1.15 };
+
+export const BOSS_TUNING = {
+  5:  { hp: 380,  speed: 52, radius: 34, damage: 18, score: 500, name: 'Cinder Warden' },
+  10: { hp: 700,  speed: 58, radius: 36, damage: 20, score: 800, name: 'Cinder Warden' },
+  15: { hp: 1150, speed: 64, radius: 38, damage: 22, score: 1500, name: 'The Cinder Warden' },
+};
+
 export const FINAL_WAVE = 15;
 export const BOSS_WAVES = [5, 10, 15];
 
-export const PLAYER = {
-  radius: 16,
-  speed: 265,
-  maxHp: 100,
-  fireInterval: 0.34,
-  bulletSpeed: 740,
-  bulletDamage: 14,
-  bulletRadius: 5,
-  magnetRadius: 120,
-  pickupRadius: 26,
-  hurtInvulnerable: 0.7,
-  contactCooldown: 0.8,
-};
-
-/** XP needed to go from level L to L+1. */
+/** XP gems needed to go from `level` to `level + 1`. */
 export function xpForLevel(level) {
-  return 5 + level * 4;
+  return PLAYER_TUNING.xpNeedBase + (level - 1) * PLAYER_TUNING.xpNeedStep;
 }
 
-export const ENEMIES = {
-  mite:   { name: 'Ember Mite',    hp: 20,  speed: 95,  radius: 14, damage: 8,  score: 10, xp: 1, colour: '#e5534b' },
-  wisp:   { name: 'Cinder Wisp',   hp: 14,  speed: 185, radius: 11, damage: 8,  score: 15, xp: 1, colour: '#4fd8e8' },
-  spitter:{ name: 'Ash Spitter',   hp: 34,  speed: 80,  radius: 15, damage: 8,  score: 25, xp: 2, colour: '#b678f2' },
-  dasher: { name: 'Spark Dasher',  hp: 30,  speed: 95,  radius: 13, damage: 12, score: 30, xp: 2, colour: '#f2c94c' },
-  brute:  { name: 'Coal Brute',    hp: 110, speed: 55,  radius: 22, damage: 18, score: 50, xp: 3, colour: '#e8823a' },
-};
-
-/** Elite variants: tougher, golden, worth more, sometimes drop a heart. */
-export const ELITE = { hpMul: 3.2, speedMul: 1.08, radiusMul: 1.35, scoreMul: 5, xpMul: 5 };
-
-export const BOSS = {
-  name: 'Cinder Warden',
-  hp: 950,
-  speed: 62,
-  radius: 46,
-  damage: 22,
-  score: 1000,
-  burstInterval: 4.2,
-  summonInterval: 6.5,
-};
-
-/** How many non-boss foes a wave tries to field, and how fast they arrive. */
-export function waveBudget(wave) {
-  return 6 + wave * 4;
+/** How many of each kind a wave fields. Early waves are gentle on purpose. */
+export function waveComposition(wave) {
+  const list = [];
+  const add = (kind, n) => { for (let i = 0; i < n; i++) list.push(kind); };
+  add('mite', 2 + wave);
+  if (wave >= 2) add('wisp', wave - 1);
+  if (wave >= 3) add('spitter', Math.floor(wave / 2));
+  if (wave >= 4) add('dasher', Math.floor((wave - 1) / 2));
+  if (wave >= 6) add('brute', Math.floor(wave / 3));
+  return list;
 }
+
+/** Seconds between spawns inside a wave; faster as waves climb, never frantic. */
 export function spawnInterval(wave) {
-  return Math.max(0.35, 1.1 - wave * 0.05);
+  return Math.max(0.5, 1.3 - wave * 0.06);
 }
 
-export const PALETTE = {
-  backdrop: '#0d0a14',
-  floorA: '#171223',
-  floorB: '#1b1529',
-  wall: '#2b2140',
-  lantern: '#f2c94c',
-  ember: '#ff7a3c',
-  player: '#ffd166',
-  cloak: '#3b6ea5',
-  text: '#f4ead8',
-  muted: '#9a8fb0',
-  panel: 'rgba(20, 14, 32, 0.92)',
-  panelEdge: '#4a3a6b',
-  hp: '#5ad66f',
-  hpLow: '#e5534b',
-  xp: '#7ab8ff',
-  boss: '#ff5a3c',
-  gold: '#f2c94c',
-};
-
-export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
-
-/** Where the best result is kept between visits (this browser only). */
-export const BEST_KEY = 'emberward.best.v1';
+/** Chance a spawned fiend is a golden elite. */
+export function eliteChance(wave) {
+  if (wave < 4) return 0;
+  return Math.min(0.18, 0.03 * wave);
+}
